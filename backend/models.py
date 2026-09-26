@@ -49,6 +49,6 @@ class Field(Base):
     name = Column(String)
     area = Column(Float)
     # PostGIS Geometry column for field boundaries (SRID 4326 for standard GPS coordinates)
-    geometry = Column(Geometry(geometry_type='POLYGON', srid=4326))
+    geometry = Column(Geometry(geometry_type='POLYGON', srid=4326, spatial_index=False))
     water_regime_id = Column(String)
     soil_profile_id = Column(String)
