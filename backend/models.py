@@ -52,3 +52,49 @@ class Field(Base):
     geometry = Column(Geometry(geometry_type='POLYGON', srid=4326, spatial_index=False))
     water_regime_id = Column(String)
     soil_profile_id = Column(String)
+
+# ... (append to existing models.py) ...
+
+class Season(Base):
+    __tablename__ = "seasons"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String) # Maha / Yala
+    year = Column(Integer)
+    scope = Column(String) # District / ASC
+    planting_window_start = Column(DateTime)
+    planting_window_end = Column(DateTime)
+    status = Column(String, default="Draft")
+
+class RiceVariety(Base):
+    __tablename__ = "rice_varieties"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    duration_min_days = Column(Integer)
+    duration_max_days = Column(Integer)
+    maturity_class = Column(String)
+    season_suitability = Column(String)
+    yield_class = Column(String)
+    water_regime_suitability = Column(String)
+
+class Cultivation(Base):
+    __tablename__ = "cultivations"
+    id = Column(Integer, primary_key=True, index=True)
+    field_id = Column(Integer, ForeignKey("fields.id"))
+    season_id = Column(Integer, ForeignKey("seasons.id"))
+    variety_id = Column(Integer, ForeignKey("rice_varieties.id"))
+    area = Column(Float)
+    planting_date = Column(DateTime)
+    status = Column(String, default="Planned")
+
+class BuyerDemand(Base):
+    __tablename__ = "buyer_demands"
+    id = Column(Integer, primary_key=True, index=True)
+    buyer_id = Column(Integer, ForeignKey("buyers.id"))
+    season_id = Column(Integer, ForeignKey("seasons.id"))
+    variety_class = Column(String)
+    quantity = Column(Float) # in MT
+    grade = Column(String)
+    harvest_start = Column(DateTime)
+    harvest_end = Column(DateTime)
+    region = Column(String)
+    status = Column(String, default="Published")
