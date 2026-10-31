@@ -10,8 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@geoman-io/leaflet-geoman-free": "^2.20.4",
     "@tailwindcss/postcss": "^4.3.3",
     "@tailwindcss/vite": "^4.3.3",
+    "@turf/turf": "^7.4.0",
     "axios": "^1.21.0",
     "leaflet": "^1.9.4",
     "react": "^19.3.1",
