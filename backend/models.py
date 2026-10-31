@@ -98,3 +98,50 @@ class BuyerDemand(Base):
     harvest_end = Column(DateTime)
     region = Column(String)
     status = Column(String, default="Published")
+
+    # Append to the bottom of backend/models.py
+
+class SeedRule(Base):
+    __tablename__ = "seed_rules"
+    id = Column(Integer, primary_key=True, index=True)
+    variety_id = Column(Integer, ForeignKey("rice_varieties.id"))
+    establishment_method = Column(String)
+    rate_per_area = Column(Float)
+    unit = Column(String)
+
+class FertilizerRule(Base):
+    __tablename__ = "fertilizer_rules"
+    id = Column(Integer, primary_key=True, index=True)
+    variety_id = Column(Integer, ForeignKey("rice_varieties.id"))
+    stage_name = Column(String)
+    day_from_planting = Column(Integer) # e.g., apply 14 days after planting
+    nutrient = Column(String)
+    rate_per_area = Column(Float)
+    unit = Column(String)
+
+class ResourcePlan(Base):
+    __tablename__ = "resource_plans"
+    id = Column(Integer, primary_key=True, index=True)
+    cultivation_id = Column(Integer, ForeignKey("cultivations.id"))
+    resource_type = Column(String) # 'Seed', 'Fertilizer', 'Water'
+    stage = Column(String)
+    quantity = Column(Float)
+    due_date = Column(DateTime)
+    status = Column(String, default="Pending")
+
+class HarvestForecast(Base):
+    __tablename__ = "harvest_forecasts"
+    id = Column(Integer, primary_key=True, index=True)
+    cultivation_id = Column(Integer, ForeignKey("cultivations.id"))
+    estimated_start_date = Column(DateTime)
+    estimated_end_date = Column(DateTime)
+    estimated_quantity = Column(Float)
+    confidence = Column(String)
+
+class ActualHarvest(Base):
+    __tablename__ = "actual_harvests"
+    id = Column(Integer, primary_key=True, index=True)
+    cultivation_id = Column(Integer, ForeignKey("cultivations.id"))
+    actual_date = Column(DateTime)
+    quantity = Column(Float)
+    grade = Column(String)
