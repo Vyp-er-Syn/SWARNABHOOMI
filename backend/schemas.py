@@ -151,3 +151,23 @@ class BuyerDemandCreate(BuyerDemandBase):
 class BuyerDemandResponse(BuyerDemandBase):
     id: int
     model_config = ConfigDict(from_attributes=True)
+
+# --- RESOURCE & FORECAST SCHEMAS ---
+class ResourcePlanResponse(BaseModel):
+    id: int
+    cultivation_id: int
+    resource_type: str
+    stage: str
+    quantity: float
+    due_date: datetime
+    status: str
+    model_config = ConfigDict(from_attributes=True)
+
+class HarvestForecastResponse(BaseModel):
+    id: int
+    cultivation_id: int
+    estimated_start_date: datetime
+    estimated_end_date: datetime
+    estimated_quantity: Optional[float] = None
+    confidence: str
+    model_config = ConfigDict(from_attributes=True)   

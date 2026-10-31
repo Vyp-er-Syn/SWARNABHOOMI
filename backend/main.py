@@ -168,3 +168,12 @@ def create_demand(demand: schemas.BuyerDemandCreate, db: Session = Depends(get_d
     db.commit()
     db.refresh(db_demand)
     return db_demand
+
+# --- 5. INTELLIGENCE & ANALYTICS OUTPUTS ---
+@app.get("/api/forecast/harvest", response_model=List[schemas.HarvestForecastResponse], tags=["Analytics"])
+def get_harvest_forecast(cultivation_id: int, db: Session = Depends(get_db)):
+    return db.query(models.HarvestForecast).filter(models.HarvestForecast.cultivation_id == cultivation_id).all()
+
+@app.get("/api/resources/plans", response_model=List[schemas.ResourcePlanResponse], tags=["Analytics"])
+def get_resource_plans(cultivation_id: int, db: Session = Depends(get_db)):
+    return db.query(models.ResourcePlan).filter(models.ResourcePlan.cultivation_id == cultivation_id).order_by(models.ResourcePlan.due_date).all()
