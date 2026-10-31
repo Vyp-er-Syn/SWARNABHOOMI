@@ -17,11 +17,21 @@ def calculate_harvest_window(db: Session, cultivation_id: int):
     start_date = cultivation.planting_date + timedelta(days=variety.duration_min_days)
     end_date = cultivation.planting_date + timedelta(days=variety.duration_max_days)
     
-    # Save the forecast to the database
+    # Calculate expected production (Area * Yield Class / Base rate)
+    # For MVP, assuming variety.yield_class contains a string like "4.5" MT per Acre
+    try:
+        expected_yield_rate = float(variety.yield_class)
+    except (ValueError, TypeError):
+        expected_yield_rate = 2.0 # Fallback default 2 MT/Acre
+        
+    estimated_production_mt = cultivation.area * expected_yield_rate
+    
+    # Save the forecast to the database with the populated estimated_quantity
     forecast = models.HarvestForecast(
         cultivation_id=cultivation.id,
         estimated_start_date=start_date,
         estimated_end_date=end_date,
+        estimated_quantity=estimated_production_mt,
         confidence="Rule-Based"
     )
     db.add(forecast)
@@ -76,3 +86,95 @@ def generate_resource_plans(db: Session, cultivation_id: int):
 
     db.commit()
     return plans
+
+# Append to backend/intelligence.py
+from sqlalchemy import func
+
+def calculate_supply_demand_balance(db: Session, season_id: int, region: str, variety_class: str):
+    """
+    Compares verified buyer demand against expected harvest supply.
+    Returns SHORTAGE, BALANCED, or HIGH SUPPLY[cite: 19].
+    """
+    # 1. Aggregate Total Demand for this segment
+    total_demand = db.query(func.sum(models.BuyerDemand.quantity)).filter(
+        models.BuyerDemand.season_id == season_id,
+        models.BuyerDemand.region == region,
+        models.BuyerDemand.variety_class == variety_class
+    ).scalar() or 0.0
+
+    # 2. Aggregate Expected Supply
+    # Joins Cultivation to HarvestForecast to sum expected yield
+    expected_supply = db.query(func.sum(models.HarvestForecast.estimated_quantity)).join(
+        models.Cultivation, models.HarvestForecast.cultivation_id == models.Cultivation.id
+    ).join(
+        models.RiceVariety, models.Cultivation.variety_id == models.RiceVariety.id
+    ).join(
+        models.Field, models.Cultivation.field_id == models.Field.id
+    ).join(
+        models.Farm, models.Field.farm_id == models.Farm.id
+    ).filter(
+        models.Cultivation.season_id == season_id,
+        models.RiceVariety.maturity_class == variety_class,
+        models.Farm.location.ilike(f"%{region}%")
+    ).scalar() or 0.0
+
+    # 3. Determine Market Balance Status
+    status = "BALANCED"
+    if expected_supply < total_demand * 0.9:
+        status = "SHORTAGE"
+    elif expected_supply > total_demand * 1.1:
+        status = "HIGH SUPPLY"
+
+    return {
+        "region": region,
+        "variety_class": variety_class,
+        "total_demand_mt": total_demand,
+        "expected_supply_mt": expected_supply,
+        "balance_status": status
+    }
+
+# Append to backend/intelligence.py
+from sqlalchemy import func
+
+def calculate_supply_demand_balance(db: Session, season_id: int, region: str, variety_class: str):
+    """
+    Compares verified buyer demand against expected harvest supply.
+    Returns SHORTAGE, BALANCED, or HIGH SUPPLY[cite: 19].
+    """
+    # 1. Aggregate Total Demand for this segment
+    total_demand = db.query(func.sum(models.BuyerDemand.quantity)).filter(
+        models.BuyerDemand.season_id == season_id,
+        models.BuyerDemand.region == region,
+        models.BuyerDemand.variety_class == variety_class
+    ).scalar() or 0.0
+
+    # 2. Aggregate Expected Supply
+    # Joins Cultivation to HarvestForecast to sum expected yield
+    expected_supply = db.query(func.sum(models.HarvestForecast.estimated_quantity)).join(
+        models.Cultivation, models.HarvestForecast.cultivation_id == models.Cultivation.id
+    ).join(
+        models.RiceVariety, models.Cultivation.variety_id == models.RiceVariety.id
+    ).join(
+        models.Field, models.Cultivation.field_id == models.Field.id
+    ).join(
+        models.Farm, models.Field.farm_id == models.Farm.id
+    ).filter(
+        models.Cultivation.season_id == season_id,
+        models.RiceVariety.maturity_class == variety_class,
+        models.Farm.location.ilike(f"%{region}%")
+    ).scalar() or 0.0
+
+    # 3. Determine Market Balance Status
+    status = "BALANCED"
+    if expected_supply < total_demand * 0.9:
+        status = "SHORTAGE"
+    elif expected_supply > total_demand * 1.1:
+        status = "HIGH SUPPLY"
+
+    return {
+        "region": region,
+        "variety_class": variety_class,
+        "total_demand_mt": total_demand,
+        "expected_supply_mt": expected_supply,
+        "balance_status": status
+    }

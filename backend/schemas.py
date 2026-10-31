@@ -171,3 +171,12 @@ class HarvestForecastResponse(BaseModel):
     estimated_quantity: Optional[float] = None
     confidence: str
     model_config = ConfigDict(from_attributes=True)   
+
+# Append to backend/schemas.py
+class SupplyDemandBalanceResponse(BaseModel):
+    region: str
+    variety_class: str
+    total_demand_mt: float
+    expected_supply_mt: float
+    balance_status: str
+    model_config = ConfigDict(from_attributes=True)

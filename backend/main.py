@@ -177,3 +177,11 @@ def get_harvest_forecast(cultivation_id: int, db: Session = Depends(get_db)):
 @app.get("/api/resources/plans", response_model=List[schemas.ResourcePlanResponse], tags=["Analytics"])
 def get_resource_plans(cultivation_id: int, db: Session = Depends(get_db)):
     return db.query(models.ResourcePlan).filter(models.ResourcePlan.cultivation_id == cultivation_id).order_by(models.ResourcePlan.due_date).all()
+
+# Append to backend/main.py
+@app.get("/api/analytics/supply-demand", response_model=schemas.SupplyDemandBalanceResponse, tags=["Analytics"])
+def get_supply_demand_balance(season_id: int, region: str, variety_class: str, db: Session = Depends(get_db)):
+    """
+    Returns the rice balance status by comparing expected production against demand[cite: 32].
+    """
+    return intelligence.calculate_supply_demand_balance(db, season_id, region, variety_class)
