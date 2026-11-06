@@ -185,3 +185,21 @@ def get_supply_demand_balance(season_id: int, region: str, variety_class: str, d
     Returns the rice balance status by comparing expected production against demand[cite: 32].
     """
     return intelligence.calculate_supply_demand_balance(db, season_id, region, variety_class)
+
+
+# Append to backend/main.py
+@app.get("/api/cultivations/{cultivation_id}/schedule", tags=["Farmer"])
+def get_smart_schedule(cultivation_id: int, db: Session = Depends(get_db)):
+    """Fetches the generated timeline and harvest forecast for a specific cultivation."""
+    cultivation = db.query(models.Cultivation).filter(models.Cultivation.id == cultivation_id).first()
+    forecast = db.query(models.HarvestForecast).filter(models.HarvestForecast.cultivation_id == cultivation_id).first()
+    
+    if not cultivation or not forecast:
+        return {"error": "Schedule not found"}
+        
+    return {
+        "planting_date": cultivation.planting_date,
+        "harvest_start": forecast.estimated_start_date,
+        "harvest_end": forecast.estimated_end_date,
+        "expected_yield_mt": forecast.estimated_quantity
+    }
