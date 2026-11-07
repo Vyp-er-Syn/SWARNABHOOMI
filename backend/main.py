@@ -1,9 +1,12 @@
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List
 from passlib.context import CryptContext
 from shapely.geometry import Polygon, mapping
 from geoalchemy2.shape import from_shape, to_shape
+from pydantic import BaseModel
 
 import models
 import schemas
@@ -12,6 +15,16 @@ from database import get_db
 app = FastAPI(
     title="SWARNABHOOMI API",
     description="Rice Production Intelligence & Demand Coordination Platform"
+)
+
+# --- CORS MIDDLEWARE ---
+# This allows your Vite frontend on port 5173 to talk to this FastAPI backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["*"], 
+    allow_headers=["*"],
 )
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -161,15 +174,46 @@ def create_cultivation(cultivation: schemas.CultivationCreate, db: Session = Dep
     db.refresh(db_cult)
     return db_cult
 
-@app.post("/api/demands", response_model=schemas.BuyerDemandResponse, tags=["Cultivations & Demand"])
-def create_demand(demand: schemas.BuyerDemandCreate, db: Session = Depends(get_db)):
-    db_demand = models.BuyerDemand(**demand.model_dump())
-    db.add(db_demand)
-    db.commit()
-    db.refresh(db_demand)
-    return db_demand
+@app.get("/api/cultivations/{cultivation_id}/schedule", tags=["Farmer"])
+def get_smart_schedule(cultivation_id: int, db: Session = Depends(get_db)):
+    """Fetches the generated timeline and harvest forecast for a specific cultivation."""
+    cultivation = db.query(models.Cultivation).filter(models.Cultivation.id == cultivation_id).first()
+    forecast = db.query(models.HarvestForecast).filter(models.HarvestForecast.cultivation_id == cultivation_id).first()
+    
+    if not cultivation or not forecast:
+        return {"error": "Schedule not found"}
+        
+    return {
+        "planting_date": cultivation.planting_date,
+        "harvest_start": forecast.estimated_start_date,
+        "harvest_end": forecast.estimated_end_date,
+        "expected_yield_mt": forecast.estimated_quantity
+    }
 
-# --- 5. INTELLIGENCE & ANALYTICS OUTPUTS ---
+# --- 5. BUYER DEMAND ---
+class BuyerDemandCreate(BaseModel):
+    season_id: int
+    buyer_id: int
+    region: str
+    variety_class: str
+    quantity: float
+
+@app.post("/api/demand", tags=["Buyer"])
+def register_buyer_demand(demand: BuyerDemandCreate, db: Session = Depends(get_db)):
+    """Registers a buyer's requirement for rice in a specific region."""
+    new_demand = models.BuyerDemand(
+        season_id=demand.season_id,
+        buyer_id=demand.buyer_id,
+        region=demand.region,
+        variety_class=demand.variety_class,
+        quantity=demand.quantity
+    )
+    db.add(new_demand)
+    db.commit()
+    db.refresh(new_demand)
+    return {"message": "Demand registered successfully", "id": new_demand.id}
+
+# --- 6. INTELLIGENCE & ANALYTICS OUTPUTS ---
 @app.get("/api/forecast/harvest", response_model=List[schemas.HarvestForecastResponse], tags=["Analytics"])
 def get_harvest_forecast(cultivation_id: int, db: Session = Depends(get_db)):
     return db.query(models.HarvestForecast).filter(models.HarvestForecast.cultivation_id == cultivation_id).all()
@@ -178,10 +222,20 @@ def get_harvest_forecast(cultivation_id: int, db: Session = Depends(get_db)):
 def get_resource_plans(cultivation_id: int, db: Session = Depends(get_db)):
     return db.query(models.ResourcePlan).filter(models.ResourcePlan.cultivation_id == cultivation_id).order_by(models.ResourcePlan.due_date).all()
 
-# Append to backend/main.py
-@app.get("/api/analytics/supply-demand", response_model=schemas.SupplyDemandBalanceResponse, tags=["Analytics"])
-def get_supply_demand_balance(season_id: int, region: str, variety_class: str, db: Session = Depends(get_db)):
-    """
-    Returns the rice balance status by comparing expected production against demand[cite: 32].
-    """
-    return intelligence.calculate_supply_demand_balance(db, season_id, region, variety_class)
+@app.get("/api/analytics/supply-demand", tags=["Government"])
+def get_market_balance(db: Session = Depends(get_db)):
+    """Calculates the national/regional balance of rice supply vs demand."""
+    # Sum all estimated harvest yields
+    total_supply = db.query(func.sum(models.HarvestForecast.estimated_quantity)).scalar() or 0.0
+    
+    # Sum all registered buyer demands
+    total_demand = db.query(func.sum(models.BuyerDemand.quantity)).scalar() or 0.0
+    
+    balance = total_supply - total_demand
+    
+    return {
+        "total_supply_mt": round(total_supply, 2),
+        "total_demand_mt": round(total_demand, 2),
+        "balance_mt": round(balance, 2),
+        "status": "Critical Shortage" if balance < 0 else "Healthy Surplus"
+    }

@@ -1,5 +1,6 @@
 import FieldMap from './components/FieldMap';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import BuyerDemandForm from './components/BuyerDemandForm';
 
 // Placeholder components for the role-based portals
 const Home = () => (
@@ -35,10 +36,12 @@ const GovernmentPortal = () => (
 );
 
 const BuyerPortal = () => (
-  <div className="p-8">
-    <Link to="/" className="text-purple-600 hover:underline mb-4 inline-block">&larr; Back to Home</Link>
-    <h1 className="text-3xl font-bold text-purple-800">Buyer Portal</h1>
-    <p className="text-gray-600 mt-2">Demand registration and market matching will be built here.</p>
+  <div className="p-8 max-w-6xl mx-auto">
+    <Link to="/" className="text-purple-600 hover:underline mb-4 inline-block font-semibold">&larr; Back to Home</Link>
+    <h1 className="text-4xl font-bold text-purple-800 mb-2">Buyer Portal</h1>
+    <p className="text-gray-600 mb-6 text-lg">Register your upcoming requirements for rice to help the government coordinate supply.</p>
+    
+    <BuyerDemandForm />
   </div>
 );
 
@@ -56,3 +59,4 @@ function App() {
 }
 
 export default App;
+

@@ -1,6 +1,7 @@
 from datetime import timedelta
 from sqlalchemy.orm import Session
 import models
+from datetime import timedelta
 
 def calculate_harvest_window(db: Session, cultivation_id: int):
     """
