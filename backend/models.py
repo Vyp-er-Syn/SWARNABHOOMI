@@ -145,3 +145,7 @@ class ActualHarvest(Base):
     actual_date = Column(DateTime)
     quantity = Column(Float)
     grade = Column(String)
+
+# Append to backend/models.py
+
+
