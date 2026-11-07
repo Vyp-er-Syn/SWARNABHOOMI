@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
+from sqlalchemy import func, text, inspect
 from typing import List
 from datetime import date, timedelta
 from shapely.geometry import Polygon, mapping
@@ -12,7 +12,7 @@ import models
 import schemas
 from database import engine, SessionLocal, get_db
 
-# Ensure all tables exist in PostgreSQL
+# 1. Create any completely missing tables
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -30,84 +30,195 @@ app.add_middleware(
 )
 
 
-def ensure_baseline_records(db: Session):
+def sync_schema_and_seed(db: Session):
     """
-    Repairs any missing columns from earlier migrations and guarantees that
-    ID=1 records exist for Role, User, Farmer, Farm, Buyer, Season, and RiceVariety.
+    1. Automatically adds any missing columns defined in models.py to existing PostgreSQL tables.
+    2. Relaxes any legacy NOT NULL columns not present in models.py.
+    3. Seeds all ID=1 baseline records in isolated transactions so Farmer, Buyer, and Government portals work seamlessly.
     """
+    inspector = inspect(engine)
+    existing_tables = inspector.get_table_names()
+
+    type_map = {
+        "INTEGER": "INTEGER",
+        "VARCHAR": "VARCHAR(255)",
+        "FLOAT": "DOUBLE PRECISION",
+        "BOOLEAN": "BOOLEAN",
+        "DATE": "DATE",
+        "DATETIME": "TIMESTAMPTZ",
+    }
+
+    # Step A: Synchronize table columns with models.py
+    for table_name, table in models.Base.metadata.tables.items():
+        if table_name in existing_tables:
+            existing_cols = {col["name"]: col for col in inspector.get_columns(table_name)}
+            model_col_names = {col.name for col in table.columns}
+
+            # Add any missing columns defined in models.py
+            for col in table.columns:
+                if col.name not in existing_cols:
+                    col_type_key = col.type.__class__.__name__.upper()
+                    sql_type = type_map.get(col_type_key, "VARCHAR(255)")
+                    try:
+                        db.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col.name}" {sql_type};'))
+                        db.commit()
+                    except Exception as e:
+                        db.rollback()
+                        print(f"Column add note ({table_name}.{col.name}): {e}")
+
+            # Drop NOT NULL constraint on any obsolete columns from older migrations
+            for existing_col_name, existing_col_info in existing_cols.items():
+                if existing_col_name not in model_col_names and existing_col_name != "id":
+                    if not existing_col_info.get("nullable", True):
+                        try:
+                            db.execute(text(f'ALTER TABLE "{table_name}" ALTER COLUMN "{existing_col_name}" DROP NOT NULL;'))
+                            db.commit()
+                        except Exception as e:
+                            db.rollback()
+
+    # Step B: Seed Roles (IDs 1..4)
+    role_data = [(1, "Farmer"), (2, "Agrarian"), (3, "Buyer"), (4, "Government")]
+    for r_id, r_name in role_data:
+        try:
+            if not db.query(models.Role).filter((models.Role.id == r_id) | (models.Role.name == r_name)).first():
+                db.add(models.Role(id=r_id, name=r_name))
+                db.commit()
+        except Exception:
+            db.rollback()
+
+    farmer_role = db.query(models.Role).filter(models.Role.name == "Farmer").first()
+    buyer_role = db.query(models.Role).filter(models.Role.name == "Buyer").first()
+
+    # Step C: Seed Default Users
     try:
-        # 1. Auto-heal any missing columns in existing PostgreSQL tables
-        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();"))
-        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'Active';"))
-        db.execute(text("ALTER TABLE buyer_demands ADD COLUMN IF NOT EXISTS grade VARCHAR(20);"))
-        db.execute(text("ALTER TABLE buyer_demands ADD COLUMN IF NOT EXISTS harvest_start DATE;"))
-        db.execute(text("ALTER TABLE buyer_demands ADD COLUMN IF NOT EXISTS harvest_end DATE;"))
-        db.execute(text("ALTER TABLE buyer_demands ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'Published';"))
-        db.commit()
-
-        # 2. Seed Roles (IDs 1..4)
-        db.execute(text("""
-            INSERT INTO roles (id, name) VALUES
-                (1, 'Farmer'),
-                (2, 'Agrarian'),
-                (3, 'Buyer'),
-                (4, 'Government')
-            ON CONFLICT DO NOTHING;
-        """))
-
-        # 3. Seed Default Users (IDs 1 and 2)
-        db.execute(text("""
-            INSERT INTO users (id, username, password_hash, role_id, status) VALUES
-                (1, 'default_farmer', 'hashed_pw_123', 1, 'Active'),
-                (2, 'default_buyer', 'hashed_pw_123', 3, 'Active')
-            ON CONFLICT DO NOTHING;
-        """))
-
-        # 4. Seed Default Farmer (ID = 1) & Farm (ID = 1)
-        db.execute(text("""
-            INSERT INTO farmers (id, user_id, full_name, phone, national_id) VALUES
-                (1, 1, 'Sunil Perera', '0771234567', '198512345678')
-            ON CONFLICT DO NOTHING;
-        """))
-
-        db.execute(text("""
-            INSERT INTO farms (id, farmer_id, name, region, total_area) VALUES
-                (1, 1, 'Anuradhapura Valley Farm', 'Anuradhapura', 10.0)
-            ON CONFLICT DO NOTHING;
-        """))
-
-        # 5. Seed Default Buyer (ID = 1)
-        db.execute(text("""
-            INSERT INTO buyers (id, user_id, company_name, organization_type, region, verified_status) VALUES
-                (1, 2, 'Rajarata Rice Mills', 'Miller', 'Anuradhapura', TRUE)
-            ON CONFLICT DO NOTHING;
-        """))
-
-        # 6. Seed Default Season (ID = 1)
-        db.execute(text("""
-            INSERT INTO seasons (id, name, year, start_date, end_date, status) VALUES
-                (1, 'Maha 2026/2027', 2026, '2026-09-01', '2027-03-31', 'Active')
-            ON CONFLICT DO NOTHING;
-        """))
-
-        # 7. Seed Default Rice Variety (ID = 1)
-        db.execute(text("""
-            INSERT INTO rice_varieties (id, name, variety_class, maturity_days, average_yield_per_acre, water_requirement_level) VALUES
-                (1, 'Bg 352', 'Short-Grain', 105, 2.2, 'Medium')
-            ON CONFLICT DO NOTHING;
-        """))
-
-        db.commit()
+        farmer_user = db.query(models.User).filter(models.User.username == "default_farmer").first()
+        if not farmer_user:
+            farmer_user = models.User(
+                username="default_farmer",
+                password_hash="hashed_pw_123",
+                role_id=farmer_role.id if farmer_role else 1,
+                status="Active"
+            )
+            db.add(farmer_user)
+            db.commit()
+            db.refresh(farmer_user)
     except Exception as e:
         db.rollback()
-        print(f"Database baseline check error: {e}")
+        farmer_user = db.query(models.User).first()
+
+    try:
+        buyer_user = db.query(models.User).filter(models.User.username == "default_buyer").first()
+        if not buyer_user:
+            buyer_user = models.User(
+                username="default_buyer",
+                password_hash="hashed_pw_123",
+                role_id=buyer_role.id if buyer_role else 1,
+                status="Active"
+            )
+            db.add(buyer_user)
+            db.commit()
+            db.refresh(buyer_user)
+    except Exception as e:
+        db.rollback()
+        buyer_user = db.query(models.User).first()
+
+    # Step D: Seed WaterRegime (ID=1) & SoilProfile (ID=1) required by FieldMap.tsx
+    try:
+        if not db.query(models.WaterRegime).filter(models.WaterRegime.id == 1).first():
+            db.add(models.WaterRegime(id=1, name="Irrigated", description="Major and minor irrigation schemes"))
+            db.commit()
+    except Exception:
+        db.rollback()
+
+    try:
+        if not db.query(models.SoilProfile).filter(models.SoilProfile.id == 1).first():
+            db.add(models.SoilProfile(id=1, soil_type="Reddish Brown Earth", drainage_class="Well Drained", fertility_rating="High"))
+            db.commit()
+    except Exception:
+        db.rollback()
+
+    # Step E: Seed Default Buyer (ID=1) required by BuyerDemandForm.tsx
+    try:
+        if not db.query(models.Buyer).filter(models.Buyer.id == 1).first():
+            db.add(models.Buyer(
+                id=1,
+                user_id=buyer_user.id if buyer_user else 1,
+                company_name="Rajarata Rice Mills",
+                organization_type="Miller",
+                region="Anuradhapura",
+                verified_status=True
+            ))
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Seed Buyer warning: {e}")
+
+    # Step F: Seed Default Farmer (ID=1) & Farm (ID=1) required by FieldMap.tsx
+    try:
+        if not db.query(models.Farmer).filter(models.Farmer.id == 1).first():
+            db.add(models.Farmer(
+                id=1,
+                user_id=farmer_user.id if farmer_user else 1,
+                full_name="Sunil Perera",
+                phone="0771234567",
+                national_id="198512345678"
+            ))
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Seed Farmer warning: {e}")
+
+    try:
+        if not db.query(models.Farm).filter(models.Farm.id == 1).first():
+            db.add(models.Farm(
+                id=1,
+                farmer_id=1,
+                name="Anuradhapura Valley Farm",
+                region="Anuradhapura",
+                total_area=10.0
+            ))
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Seed Farm warning: {e}")
+
+    # Step G: Seed Default Season (ID=1) & RiceVariety (ID=1)
+    try:
+        if not db.query(models.Season).filter(models.Season.id == 1).first():
+            db.add(models.Season(
+                id=1,
+                name="Maha 2026/2027",
+                year=2026,
+                start_date=date(2026, 9, 1),
+                end_date=date(2027, 3, 31),
+                status="Active"
+            ))
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Seed Season warning: {e}")
+
+    try:
+        if not db.query(models.RiceVariety).filter(models.RiceVariety.id == 1).first():
+            db.add(models.RiceVariety(
+                id=1,
+                name="Bg 352",
+                variety_class="Short-Grain",
+                maturity_days=105,
+                average_yield_per_acre=2.2,
+                water_requirement_level="Medium"
+            ))
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Seed Variety warning: {e}")
 
 
 @app.on_event("startup")
 def on_startup():
     db = SessionLocal()
     try:
-        ensure_baseline_records(db)
+        sync_schema_and_seed(db)
     finally:
         db.close()
 
@@ -123,7 +234,7 @@ def health_check():
 # --- 1. ROLE INITIALIZATION ---
 @app.post("/api/roles/seed", response_model=List[schemas.RoleResponse], tags=["System"])
 def seed_roles(db: Session = Depends(get_db)):
-    ensure_baseline_records(db)
+    sync_schema_and_seed(db)
     return db.query(models.Role).all()
 
 
@@ -175,7 +286,7 @@ def create_farm(farm: schemas.FarmCreate, db: Session = Depends(get_db)):
 
 @app.post("/api/fields", response_model=schemas.FieldResponse, tags=["Farms & Fields"])
 def create_field(field_in: schemas.FieldCreate, db: Session = Depends(get_db)):
-    ensure_baseline_records(db)
+    sync_schema_and_seed(db)
     try:
         poly = Polygon(field_in.geometry_coordinates[0])
         wkt_geom = from_shape(poly, srid=4326)
@@ -250,23 +361,30 @@ def list_varieties(db: Session = Depends(get_db)):
 
 @app.post("/api/cultivations", response_model=schemas.CultivationResponse, tags=["Cultivations & Demand"])
 def create_cultivation(cultivation: schemas.CultivationCreate, db: Session = Depends(get_db)):
-    ensure_baseline_records(db)
-    db_cult = models.Cultivation(**cultivation.model_dump())
-    db.add(db_cult)
-    db.commit()
-    db.refresh(db_cult)
+    sync_schema_and_seed(db)
 
-    # Automatically generate HarvestForecast when a cultivation is registered
-    field = db.query(models.Field).filter(models.Field.id == db_cult.field_id).first()
-    variety = db.query(models.RiceVariety).filter(models.RiceVariety.id == db_cult.variety_id).first()
+    field = db.query(models.Field).filter(models.Field.id == cultivation.field_id).first()
+    variety = db.query(models.RiceVariety).filter(models.RiceVariety.id == cultivation.variety_id).first()
 
     area_acres = field.area if field else 1.0
     yield_per_acre = (variety.average_yield_per_acre if variety and variety.average_yield_per_acre else 2.2)
     maturity_days = (variety.maturity_days if variety and variety.maturity_days else 105)
 
-    est_start = db_cult.planting_date + timedelta(days=maturity_days)
+    est_start = cultivation.planting_date + timedelta(days=maturity_days)
     est_end = est_start + timedelta(days=14)
     est_qty = round(area_acres * yield_per_acre, 2)
+
+    db_cult = models.Cultivation(
+        field_id=cultivation.field_id,
+        season_id=cultivation.season_id,
+        variety_id=cultivation.variety_id,
+        planting_date=cultivation.planting_date,
+        expected_harvest_date=est_start,
+        status=cultivation.status
+    )
+    db.add(db_cult)
+    db.commit()
+    db.refresh(db_cult)
 
     forecast = models.HarvestForecast(
         cultivation_id=db_cult.id,
@@ -309,7 +427,8 @@ class BuyerDemandSimpleCreate(BaseModel):
 @app.post("/api/demand", tags=["Buyer"])
 def register_buyer_demand(demand: BuyerDemandSimpleCreate, db: Session = Depends(get_db)):
     """Registers a buyer's requirement for rice in a specific region."""
-    ensure_baseline_records(db)
+    sync_schema_and_seed(db)
+
     new_demand = models.BuyerDemand(
         season_id=demand.season_id,
         buyer_id=demand.buyer_id,

@@ -5,6 +5,7 @@ import * as turf from '@turf/turf';
 import 'leaflet/dist/leaflet.css';
 import '@geoman-io/leaflet-geoman-free';
 import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css';
+import SmartSchedule from './SmartSchedule';
 
 // Sub-component to attach Geoman controls to the Leaflet map instance
 function GeomanControls({ onPolygonComplete }: { onPolygonComplete: (coords: number[][]) => void }) {
@@ -24,7 +25,7 @@ function GeomanControls({ onPolygonComplete }: { onPolygonComplete: (coords: num
       dragMode: false,
       removalMode: true,
     });
-    
+
     // Set custom styling for the polygon being drawn
     map.pm.setPathOptions({
       color: '#10b981', // Tailwind green-500
@@ -56,7 +57,8 @@ export default function FieldMap() {
   const [fieldCoordinates, setFieldCoordinates] = useState<number[][][]>([]);
   const [calculatedArea, setCalculatedArea] = useState({ acres: 0, perches: 0 });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
+  const [scheduleData, setScheduleData] = useState<any>(null);
+
   // Form State
   const [fieldName, setFieldName] = useState("My Paddy Plot");
   const [plantingDate, setPlantingDate] = useState("");
@@ -64,12 +66,13 @@ export default function FieldMap() {
   const handlePolygonComplete = (coordinates: number[][]) => {
     const polygon = turf.polygon([coordinates]);
     const areaSqMeters = turf.area(polygon);
-    
+
     setCalculatedArea({
       acres: parseFloat((areaSqMeters / 4046.86).toFixed(2)),
       perches: parseFloat((areaSqMeters / 25.2929).toFixed(1))
     });
     setFieldCoordinates([coordinates]);
+    setScheduleData(null); // Reset old schedule if drawing a new plot
   };
 
   const registerCultivation = async () => {
@@ -80,33 +83,37 @@ export default function FieldMap() {
 
     setIsSubmitting(true);
     try {
-      // 1. Save the Field Boundary
+      // 1. Save the Field Boundary (water_regime_id and soil_profile_id must be integers)
       const fieldPayload = {
         name: fieldName,
-        area: calculatedArea.acres, 
-        water_regime_id: "Irrigated",
-        soil_profile_id: "Reddish Brown Earth",
-        farm_id: 1, 
+        area: calculatedArea.acres,
+        water_regime_id: 1,
+        soil_profile_id: 1,
+        farm_id: 1,
         geometry_coordinates: fieldCoordinates
       };
       const fieldRes = await axios.post('http://localhost:8000/api/fields', fieldPayload);
-      
+
       // 2. Register the Cultivation to trigger the Intelligence Engine
       const cultivationPayload = {
         field_id: fieldRes.data.id,
-        season_id: 1, 
-        variety_id: 1, 
+        season_id: 1,
+        variety_id: 1,
         planting_date: plantingDate,
-        area: calculatedArea.acres
+        status: "Planned"
       };
-      await axios.post('http://localhost:8000/api/cultivations', cultivationPayload);
-      
-      alert(`Success! Field mapped and cultivation scheduled.`);
-      // Clear form
+      const cultivationRes = await axios.post('http://localhost:8000/api/cultivations', cultivationPayload);
+
+      // 3. Fetch the generated Smart Schedule for this cultivation
+      const scheduleRes = await axios.get(`http://localhost:8000/api/cultivations/${cultivationRes.data.id}/schedule`);
+      setScheduleData(scheduleRes.data);
+
+      alert("Success! Field mapped and cultivation scheduled.");
+      // Clear form inputs while keeping the generated SmartSchedule visible
       setFieldCoordinates([]);
       setCalculatedArea({ acres: 0, perches: 0 });
-    } catch (error) {
-      console.error("Error:", error);
+    } catch (error: any) {
+      console.error("Error:", error?.response?.data || error);
       alert("Failed to save. Ensure your FastAPI backend is running.");
     } finally {
       setIsSubmitting(false);
@@ -125,11 +132,11 @@ export default function FieldMap() {
           <GeomanControls onPolygonComplete={handlePolygonComplete} />
         </MapContainer>
       </div>
-      
+
       {fieldCoordinates.length > 0 && (
         <div className="bg-gray-900 text-gray-100 p-6 rounded-lg shadow-md border border-gray-700">
           <h3 className="text-xl font-semibold mb-4 border-b border-gray-700 pb-2">Cultivation Details</h3>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
             <div>
               <label className="block text-sm text-gray-400 mb-1">Measured Area</label>
@@ -137,11 +144,11 @@ export default function FieldMap() {
                 {calculatedArea.acres} Acres <span className="text-gray-500 text-sm">({calculatedArea.perches} Perches)</span>
               </div>
             </div>
-            
+
             <div>
               <label className="block text-sm text-gray-400 mb-1">Field Name</label>
-              <input 
-                type="text" 
+              <input
+                type="text"
                 value={fieldName}
                 onChange={(e) => setFieldName(e.target.value)}
                 className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-green-500"
@@ -150,8 +157,8 @@ export default function FieldMap() {
 
             <div>
               <label className="block text-sm text-gray-400 mb-1">Estimated Planting Date</label>
-              <input 
-                type="date" 
+              <input
+                type="date"
                 value={plantingDate}
                 onChange={(e) => setPlantingDate(e.target.value)}
                 className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-green-500"
@@ -159,12 +166,12 @@ export default function FieldMap() {
             </div>
           </div>
 
-          <button 
+          <button
             onClick={registerCultivation}
             disabled={isSubmitting || !plantingDate}
             className={`w-full py-3 rounded font-bold text-white transition-colors ${
-              !isSubmitting && plantingDate 
-                ? 'bg-green-600 hover:bg-green-700' 
+              !isSubmitting && plantingDate
+                ? 'bg-green-600 hover:bg-green-700'
                 : 'bg-gray-700 text-gray-500 cursor-not-allowed'
             }`}
           >
@@ -172,6 +179,9 @@ export default function FieldMap() {
           </button>
         </div>
       )}
+
+      {/* Render the Smart Schedule timeline once generated */}
+      {scheduleData && <SmartSchedule schedule={scheduleData} />}
     </div>
   );
 }
