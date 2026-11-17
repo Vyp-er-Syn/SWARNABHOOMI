@@ -213,6 +213,16 @@ def sync_schema_and_seed(db: Session):
         db.rollback()
         print(f"Seed Variety warning: {e}")
 
+    # Step H: Sync PostgreSQL primary key sequences after explicit ID seeding
+    for tbl in ["roles", "users", "water_regimes", "soil_profiles", "farmers", "farms", "buyers", "seasons", "rice_varieties"]:
+        try:
+            db.execute(text(f"SELECT setval(pg_get_serial_sequence('{tbl}', 'id'), COALESCE((SELECT MAX(id) FROM {tbl}), 1), true);"))
+            db.commit()
+        except Exception:
+            db.rollback()
+
+
+
 
 @app.on_event("startup")
 def on_startup():

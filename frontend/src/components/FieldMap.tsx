@@ -7,12 +7,10 @@ import '@geoman-io/leaflet-geoman-free';
 import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css';
 import SmartSchedule from './SmartSchedule';
 
-// Sub-component to attach Geoman controls to the Leaflet map instance
 function GeomanControls({ onPolygonComplete }: { onPolygonComplete: (coords: number[][]) => void }) {
   const map = useMap();
 
   useEffect(() => {
-    // Enable the Geoman drawing toolbar
     map.pm.addControls({
       position: 'topright',
       drawCircle: false,
@@ -26,19 +24,17 @@ function GeomanControls({ onPolygonComplete }: { onPolygonComplete: (coords: num
       removalMode: true,
     });
 
-    // Set custom styling for the polygon being drawn
     map.pm.setPathOptions({
-      color: '#10b981', // Tailwind green-500
+      color: '#10b981',
       weight: 3,
     });
 
-    // Listen for when a farmer finishes drawing the polygon
     map.on('pm:create', (e: any) => {
       if (e.shape === 'Polygon') {
         const layer = e.layer;
         const latLngs = layer.getLatLngs()[0];
         const coordinates = latLngs.map((coord: any) => [coord.lng, coord.lat]);
-        coordinates.push(coordinates[0]); // Close the polygon for GeoJSON
+        coordinates.push(coordinates[0]);
         onPolygonComplete(coordinates);
       }
     });
@@ -53,13 +49,12 @@ function GeomanControls({ onPolygonComplete }: { onPolygonComplete: (coords: num
 }
 
 export default function FieldMap() {
-  const center: [number, number] = [8.3114, 80.4037]; // Anuradhapura
+  const center: [number, number] = [8.3114, 80.4037];
   const [fieldCoordinates, setFieldCoordinates] = useState<number[][][]>([]);
   const [calculatedArea, setCalculatedArea] = useState({ acres: 0, perches: 0 });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [scheduleData, setScheduleData] = useState<any>(null);
 
-  // Form State
   const [fieldName, setFieldName] = useState("My Paddy Plot");
   const [plantingDate, setPlantingDate] = useState("");
 
@@ -72,7 +67,7 @@ export default function FieldMap() {
       perches: parseFloat((areaSqMeters / 25.2929).toFixed(1))
     });
     setFieldCoordinates([coordinates]);
-    setScheduleData(null); // Reset old schedule if drawing a new plot
+    setScheduleData(null);
   };
 
   const registerCultivation = async () => {
@@ -83,18 +78,18 @@ export default function FieldMap() {
 
     setIsSubmitting(true);
     try {
-      // 1. Save the Field Boundary (water_regime_id and soil_profile_id must be integers)
+      // 1. Save the Field Boundary (IDs must be integers matching WaterRegime & SoilProfile)
       const fieldPayload = {
         name: fieldName,
-        area: calculatedArea.acres,
+        area: calculatedArea.acres > 0 ? calculatedArea.acres : 0.1,
         water_regime_id: 1,
         soil_profile_id: 1,
         farm_id: 1,
         geometry_coordinates: fieldCoordinates
       };
-      const fieldRes = await axios.post('http://localhost:8000/api/fields', fieldPayload);
+      const fieldRes = await axios.post('http://127.0.0.1:8000/api/fields', fieldPayload);
 
-      // 2. Register the Cultivation to trigger the Intelligence Engine
+      // 2. Register the Cultivation
       const cultivationPayload = {
         field_id: fieldRes.data.id,
         season_id: 1,
@@ -102,19 +97,19 @@ export default function FieldMap() {
         planting_date: plantingDate,
         status: "Planned"
       };
-      const cultivationRes = await axios.post('http://localhost:8000/api/cultivations', cultivationPayload);
+      const cultRes = await axios.post('http://127.0.0.1:8000/api/cultivations', cultivationPayload);
 
-      // 3. Fetch the generated Smart Schedule for this cultivation
-      const scheduleRes = await axios.get(`http://localhost:8000/api/cultivations/${cultivationRes.data.id}/schedule`);
+      // 3. Fetch the generated Smart Schedule
+      const scheduleRes = await axios.get(`http://127.0.0.1:8000/api/cultivations/${cultRes.data.id}/schedule`);
       setScheduleData(scheduleRes.data);
 
       alert("Success! Field mapped and cultivation scheduled.");
-      // Clear form inputs while keeping the generated SmartSchedule visible
       setFieldCoordinates([]);
       setCalculatedArea({ acres: 0, perches: 0 });
     } catch (error: any) {
-      console.error("Error:", error?.response?.data || error);
-      alert("Failed to save. Ensure your FastAPI backend is running.");
+      const detail = error?.response?.data?.detail;
+      console.error("Submission error:", detail || error);
+      alert(`Failed to save: ${detail ? JSON.stringify(detail) : "Ensure FastAPI backend is running on port 8000."}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -180,7 +175,6 @@ export default function FieldMap() {
         </div>
       )}
 
-      {/* Render the Smart Schedule timeline once generated */}
       {scheduleData && <SmartSchedule schedule={scheduleData} />}
     </div>
   );

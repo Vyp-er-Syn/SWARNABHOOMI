@@ -72,10 +72,13 @@ class FieldBase(BaseModel):
     water_regime_id: str
     soil_profile_id: str
     
-class FieldCreate(FieldBase):
+class FieldCreate(BaseModel):
     farm_id: int
-    # GeoJSON polygon coordinate array
-    geometry_coordinates: List[List[List[float]]] 
+    name: str
+    area: float
+    geometry_coordinates: List[List[List[float]]]
+    water_regime_id: int  # Change this from str to int
+    soil_profile_id: int  # Change this from str to int
 
 class FieldResponse(FieldBase):
     id: int
