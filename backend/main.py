@@ -12,7 +12,6 @@ import models
 import schemas
 from database import engine, SessionLocal, get_db
 
-# 1. Create any completely missing tables
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -20,7 +19,6 @@ app = FastAPI(
     description="Rice Production Intelligence & Demand Coordination Platform"
 )
 
-# --- CORS MIDDLEWARE ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,11 +29,6 @@ app.add_middleware(
 
 
 def sync_schema_and_seed(db: Session):
-    """
-    1. Automatically adds any missing columns defined in models.py to existing PostgreSQL tables.
-    2. Relaxes any legacy NOT NULL columns not present in models.py.
-    3. Seeds all ID=1 baseline records in isolated transactions so Farmer, Buyer, and Government portals work seamlessly.
-    """
     inspector = inspect(engine)
     existing_tables = inspector.get_table_names()
 
@@ -48,13 +41,11 @@ def sync_schema_and_seed(db: Session):
         "DATETIME": "TIMESTAMPTZ",
     }
 
-    # Step A: Synchronize table columns with models.py
     for table_name, table in models.Base.metadata.tables.items():
         if table_name in existing_tables:
             existing_cols = {col["name"]: col for col in inspector.get_columns(table_name)}
             model_col_names = {col.name for col in table.columns}
 
-            # Add any missing columns defined in models.py
             for col in table.columns:
                 if col.name not in existing_cols:
                     col_type_key = col.type.__class__.__name__.upper()
@@ -62,21 +53,19 @@ def sync_schema_and_seed(db: Session):
                     try:
                         db.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col.name}" {sql_type};'))
                         db.commit()
-                    except Exception as e:
+                    except Exception:
                         db.rollback()
-                        print(f"Column add note ({table_name}.{col.name}): {e}")
 
-            # Drop NOT NULL constraint on any obsolete columns from older migrations
             for existing_col_name, existing_col_info in existing_cols.items():
                 if existing_col_name not in model_col_names and existing_col_name != "id":
                     if not existing_col_info.get("nullable", True):
                         try:
                             db.execute(text(f'ALTER TABLE "{table_name}" ALTER COLUMN "{existing_col_name}" DROP NOT NULL;'))
                             db.commit()
-                        except Exception as e:
+                        except Exception:
                             db.rollback()
 
-    # Step B: Seed Roles (IDs 1..4)
+    # Seed Roles
     role_data = [(1, "Farmer"), (2, "Agrarian"), (3, "Buyer"), (4, "Government")]
     for r_id, r_name in role_data:
         try:
@@ -89,55 +78,58 @@ def sync_schema_and_seed(db: Session):
     farmer_role = db.query(models.Role).filter(models.Role.name == "Farmer").first()
     buyer_role = db.query(models.Role).filter(models.Role.name == "Buyer").first()
 
-    # Step C: Seed Default Users
-    try:
-        farmer_user = db.query(models.User).filter(models.User.username == "default_farmer").first()
-        if not farmer_user:
-            farmer_user = models.User(
-                username="default_farmer",
-                password_hash="hashed_pw_123",
-                role_id=farmer_role.id if farmer_role else 1,
-                status="Active"
-            )
-            db.add(farmer_user)
-            db.commit()
-            db.refresh(farmer_user)
-    except Exception as e:
-        db.rollback()
-        farmer_user = db.query(models.User).first()
+    # Seed Default Users
+     # Step C: Seed Default Users for all 4 Portals
+    default_users = [
+        ("default_farmer", "Farmer"),
+        ("default_agrarian", "Agrarian"),
+        ("default_buyer", "Buyer"),
+        ("default_gov", "Government"),
+    ]
+    for uname, rname in default_users:
+        try:
+            role_obj = db.query(models.Role).filter(models.Role.name == rname).first()
+            if not db.query(models.User).filter(models.User.username == uname).first():
+                db.add(models.User(
+                    username=uname,
+                    password_hash="hashed_pw_123",
+                    role_id=role_obj.id if role_obj else 1,
+                    status="Active"
+                ))
+                db.commit()
+        except Exception:
+            db.rollback()
 
-    try:
-        buyer_user = db.query(models.User).filter(models.User.username == "default_buyer").first()
-        if not buyer_user:
-            buyer_user = models.User(
-                username="default_buyer",
-                password_hash="hashed_pw_123",
-                role_id=buyer_role.id if buyer_role else 1,
-                status="Active"
-            )
-            db.add(buyer_user)
-            db.commit()
-            db.refresh(buyer_user)
-    except Exception as e:
-        db.rollback()
-        buyer_user = db.query(models.User).first()
+    farmer_user = db.query(models.User).filter(models.User.username == "default_farmer").first()
+    buyer_user = db.query(models.User).filter(models.User.username == "default_buyer").first()
 
-    # Step D: Seed WaterRegime (ID=1) & SoilProfile (ID=1) required by FieldMap.tsx
-    try:
-        if not db.query(models.WaterRegime).filter(models.WaterRegime.id == 1).first():
-            db.add(models.WaterRegime(id=1, name="Irrigated", description="Major and minor irrigation schemes"))
-            db.commit()
-    except Exception:
-        db.rollback()
+    # Seed Water Regimes & Soil Profiles
+    water_regimes = [
+        (1, "Irrigated", "Major and minor irrigation schemes"),
+        (2, "Rainfed", "Dependent on seasonal monsoon rainfall"),
+    ]
+    for w_id, w_name, w_desc in water_regimes:
+        try:
+            if not db.query(models.WaterRegime).filter(models.WaterRegime.id == w_id).first():
+                db.add(models.WaterRegime(id=w_id, name=w_name, description=w_desc))
+                db.commit()
+        except Exception:
+            db.rollback()
 
-    try:
-        if not db.query(models.SoilProfile).filter(models.SoilProfile.id == 1).first():
-            db.add(models.SoilProfile(id=1, soil_type="Reddish Brown Earth", drainage_class="Well Drained", fertility_rating="High"))
-            db.commit()
-    except Exception:
-        db.rollback()
+    soil_profiles = [
+        (1, "Reddish Brown Earth", "Well Drained", "High"),
+        (2, "Low Humic Gley", "Poorly Drained", "Medium"),
+        (3, "Alluvial", "Moderately Drained", "High"),
+    ]
+    for s_id, s_type, s_drain, s_fert in soil_profiles:
+        try:
+            if not db.query(models.SoilProfile).filter(models.SoilProfile.id == s_id).first():
+                db.add(models.SoilProfile(id=s_id, soil_type=s_type, drainage_class=s_drain, fertility_rating=s_fert))
+                db.commit()
+        except Exception:
+            db.rollback()
 
-    # Step E: Seed Default Buyer (ID=1) required by BuyerDemandForm.tsx
+    # Seed Default Buyer, Farmer & Farm
     try:
         if not db.query(models.Buyer).filter(models.Buyer.id == 1).first():
             db.add(models.Buyer(
@@ -149,11 +141,9 @@ def sync_schema_and_seed(db: Session):
                 verified_status=True
             ))
             db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        print(f"Seed Buyer warning: {e}")
 
-    # Step F: Seed Default Farmer (ID=1) & Farm (ID=1) required by FieldMap.tsx
     try:
         if not db.query(models.Farmer).filter(models.Farmer.id == 1).first():
             db.add(models.Farmer(
@@ -164,9 +154,8 @@ def sync_schema_and_seed(db: Session):
                 national_id="198512345678"
             ))
             db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        print(f"Seed Farmer warning: {e}")
 
     try:
         if not db.query(models.Farm).filter(models.Farm.id == 1).first():
@@ -178,11 +167,10 @@ def sync_schema_and_seed(db: Session):
                 total_area=10.0
             ))
             db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        print(f"Seed Farm warning: {e}")
 
-    # Step G: Seed Default Season (ID=1) & RiceVariety (ID=1)
+    # Seed Default Season
     try:
         if not db.query(models.Season).filter(models.Season.id == 1).first():
             db.add(models.Season(
@@ -194,34 +182,55 @@ def sync_schema_and_seed(db: Session):
                 status="Active"
             ))
             db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        print(f"Seed Season warning: {e}")
 
+    # Seed Sri Lankan Rice Varieties
+    varieties_seed = [
+        (1, "Bg 352", "Short-Grain (Nadu)", 105, 2.2, "Medium"),
+        (2, "Bg 300", "Short-Grain (Nadu)", 90, 2.0, "Low"),
+        (3, "Bg 360", "Samba", 105, 1.9, "Medium"),
+        (4, "At 362", "Long-Grain (Red/White)", 105, 2.4, "Medium"),
+        (5, "Suwandel", "Traditional (Heenati, Suwandel)", 120, 1.4, "High"),
+    ]
+    for v_id, v_name, v_class, v_days, v_yield, v_water in varieties_seed:
+        try:
+            if not db.query(models.RiceVariety).filter((models.RiceVariety.id == v_id) | (models.RiceVariety.name == v_name)).first():
+                db.add(models.RiceVariety(
+                    id=v_id,
+                    name=v_name,
+                    variety_class=v_class,
+                    maturity_days=v_days,
+                    average_yield_per_acre=v_yield,
+                    water_requirement_level=v_water
+                ))
+                db.commit()
+        except Exception:
+            db.rollback()
+
+    # Seed Agronomic Resource Rules for each variety
     try:
-        if not db.query(models.RiceVariety).filter(models.RiceVariety.id == 1).first():
-            db.add(models.RiceVariety(
-                id=1,
-                name="Bg 352",
-                variety_class="Short-Grain",
-                maturity_days=105,
-                average_yield_per_acre=2.2,
-                water_requirement_level="Medium"
-            ))
+        if db.query(models.ResourceRule).count() == 0:
+            all_varieties = db.query(models.RiceVariety).all()
+            for v in all_varieties:
+                rules = [
+                    models.ResourceRule(variety_id=v.id, stage_name="Basal Dressing", days_after_planting=0, input_type="Fertilizer", input_name="TSP (Triple Super Phosphate)", quantity_per_acre=22.0, unit="kg"),
+                    models.ResourceRule(variety_id=v.id, stage_name="1st Top Dressing (Vegetative)", days_after_planting=14, input_type="Fertilizer", input_name="Urea", quantity_per_acre=30.0, unit="kg"),
+                    models.ResourceRule(variety_id=v.id, stage_name="2nd Top Dressing (Tillering)", days_after_planting=28, input_type="Fertilizer", input_name="Urea + MOP", quantity_per_acre=45.0, unit="kg"),
+                    models.ResourceRule(variety_id=v.id, stage_name="3rd Top Dressing (Panicle Initiation)", days_after_planting=42, input_type="Fertilizer", input_name="Urea + MOP", quantity_per_acre=35.0, unit="kg"),
+                ]
+                db.add_all(rules)
             db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        print(f"Seed Variety warning: {e}")
 
-    # Step H: Sync PostgreSQL primary key sequences after explicit ID seeding
-    for tbl in ["roles", "users", "water_regimes", "soil_profiles", "farmers", "farms", "buyers", "seasons", "rice_varieties"]:
+    # Sync PostgreSQL sequences
+    for tbl in ["roles", "users", "water_regimes", "soil_profiles", "farmers", "farms", "buyers", "seasons", "rice_varieties", "resource_rules"]:
         try:
             db.execute(text(f"SELECT setval(pg_get_serial_sequence('{tbl}', 'id'), COALESCE((SELECT MAX(id) FROM {tbl}), 1), true);"))
             db.commit()
         except Exception:
             db.rollback()
-
-
 
 
 @app.on_event("startup")
@@ -241,62 +250,24 @@ def health_check():
     }
 
 
-# --- 1. ROLE INITIALIZATION ---
-@app.post("/api/roles/seed", response_model=List[schemas.RoleResponse], tags=["System"])
-def seed_roles(db: Session = Depends(get_db)):
-    sync_schema_and_seed(db)
-    return db.query(models.Role).all()
-
-
-# --- 2. USERS, FARMERS & BUYERS ---
-@app.post("/api/users", response_model=schemas.UserResponse, tags=["Users & Auth"])
-def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    existing = db.query(models.User).filter(models.User.username == user.username).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Username already registered")
-    db_user = models.User(
-        username=user.username,
-        password_hash=user.password,
-        role_id=user.role_id,
-        status=user.status
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return db_user
-
-
-@app.post("/api/farmers", response_model=schemas.FarmerResponse, tags=["Farmers"])
-def create_farmer(farmer: schemas.FarmerCreate, db: Session = Depends(get_db)):
-    db_farmer = models.Farmer(**farmer.model_dump())
-    db.add(db_farmer)
-    db.commit()
-    db.refresh(db_farmer)
-    return db_farmer
-
-
-@app.post("/api/buyers", response_model=schemas.BuyerResponse, tags=["Buyers"])
-def create_buyer(buyer: schemas.BuyerCreate, db: Session = Depends(get_db)):
-    db_buyer = models.Buyer(**buyer.model_dump())
-    db.add(db_buyer)
-    db.commit()
-    db.refresh(db_buyer)
-    return db_buyer
-
-
-# --- 3. FARMS & SPATIAL FIELDS (POSTGIS) ---
-@app.post("/api/farms", response_model=schemas.FarmResponse, tags=["Farms & Fields"])
-def create_farm(farm: schemas.FarmCreate, db: Session = Depends(get_db)):
-    db_farm = models.Farm(**farm.model_dump())
-    db.add(db_farm)
-    db.commit()
-    db.refresh(db_farm)
-    return db_farm
+@app.get("/api/catalog/varieties", tags=["Seasons & Varieties"])
+def get_variety_catalog(db: Session = Depends(get_db)):
+    varieties = db.query(models.RiceVariety).order_by(models.RiceVariety.id).all()
+    return [
+        {
+            "id": v.id,
+            "name": v.name,
+            "variety_class": v.variety_class,
+            "maturity_days": v.maturity_days,
+            "average_yield_per_acre": v.average_yield_per_acre,
+            "water_requirement_level": v.water_requirement_level,
+        }
+        for v in varieties
+    ]
 
 
 @app.post("/api/fields", response_model=schemas.FieldResponse, tags=["Farms & Fields"])
 def create_field(field_in: schemas.FieldCreate, db: Session = Depends(get_db)):
-    sync_schema_and_seed(db)
     try:
         poly = Polygon(field_in.geometry_coordinates[0])
         wkt_geom = from_shape(poly, srid=4326)
@@ -345,34 +316,8 @@ def get_fields(db: Session = Depends(get_db)):
     return results
 
 
-# --- 4. SEASONS, VARIETIES & CULTIVATIONS ---
-@app.post("/api/seasons", response_model=schemas.SeasonResponse, tags=["Seasons & Varieties"])
-def create_season(season: schemas.SeasonCreate, db: Session = Depends(get_db)):
-    db_season = models.Season(**season.model_dump())
-    db.add(db_season)
-    db.commit()
-    db.refresh(db_season)
-    return db_season
-
-
-@app.post("/api/rice-varieties", response_model=schemas.RiceVarietyResponse, tags=["Seasons & Varieties"])
-def create_variety(variety: schemas.RiceVarietyCreate, db: Session = Depends(get_db)):
-    db_variety = models.RiceVariety(**variety.model_dump())
-    db.add(db_variety)
-    db.commit()
-    db.refresh(db_variety)
-    return db_variety
-
-
-@app.get("/api/rice-varieties", response_model=List[schemas.RiceVarietyResponse], tags=["Seasons & Varieties"])
-def list_varieties(db: Session = Depends(get_db)):
-    return db.query(models.RiceVariety).all()
-
-
 @app.post("/api/cultivations", response_model=schemas.CultivationResponse, tags=["Cultivations & Demand"])
 def create_cultivation(cultivation: schemas.CultivationCreate, db: Session = Depends(get_db)):
-    sync_schema_and_seed(db)
-
     field = db.query(models.Field).filter(models.Field.id == cultivation.field_id).first()
     variety = db.query(models.RiceVariety).filter(models.RiceVariety.id == cultivation.variety_id).first()
 
@@ -380,7 +325,8 @@ def create_cultivation(cultivation: schemas.CultivationCreate, db: Session = Dep
     yield_per_acre = (variety.average_yield_per_acre if variety and variety.average_yield_per_acre else 2.2)
     maturity_days = (variety.maturity_days if variety and variety.maturity_days else 105)
 
-    est_start = cultivation.planting_date + timedelta(days=maturity_days)
+    p_date = cultivation.planting_date.date() if hasattr(cultivation.planting_date, "date") else cultivation.planting_date
+    est_start = p_date + timedelta(days=maturity_days)
     est_end = est_start + timedelta(days=14)
     est_qty = round(area_acres * yield_per_acre, 2)
 
@@ -388,7 +334,7 @@ def create_cultivation(cultivation: schemas.CultivationCreate, db: Session = Dep
         field_id=cultivation.field_id,
         season_id=cultivation.season_id,
         variety_id=cultivation.variety_id,
-        planting_date=cultivation.planting_date,
+        planting_date=p_date,
         expected_harvest_date=est_start,
         status=cultivation.status
     )
@@ -396,6 +342,7 @@ def create_cultivation(cultivation: schemas.CultivationCreate, db: Session = Dep
     db.commit()
     db.refresh(db_cult)
 
+    # 1. Generate Harvest Forecast
     forecast = models.HarvestForecast(
         cultivation_id=db_cult.id,
         estimated_start_date=est_start,
@@ -404,8 +351,22 @@ def create_cultivation(cultivation: schemas.CultivationCreate, db: Session = Dep
         confidence_level=0.85
     )
     db.add(forecast)
-    db.commit()
 
+    # 2. Generate Stage-by-Stage Agronomic Resource Plans
+    rules = db.query(models.ResourceRule).filter(models.ResourceRule.variety_id == db_cult.variety_id).all()
+    for rule in rules:
+        plan = models.ResourcePlan(
+            cultivation_id=db_cult.id,
+            task_type=f"{rule.stage_name} ({rule.input_type})",
+            recommended_input=rule.input_name,
+            due_date=p_date + timedelta(days=rule.days_after_planting),
+            quantity=round(rule.quantity_per_acre * area_acres, 2),
+            unit=rule.unit,
+            status="Scheduled"
+        )
+        db.add(plan)
+
+    db.commit()
     return db_cult
 
 
@@ -413,19 +374,35 @@ def create_cultivation(cultivation: schemas.CultivationCreate, db: Session = Dep
 def get_smart_schedule(cultivation_id: int, db: Session = Depends(get_db)):
     cultivation = db.query(models.Cultivation).filter(models.Cultivation.id == cultivation_id).first()
     forecast = db.query(models.HarvestForecast).filter(models.HarvestForecast.cultivation_id == cultivation_id).first()
+    plans = db.query(models.ResourcePlan).filter(models.ResourcePlan.cultivation_id == cultivation_id).order_by(models.ResourcePlan.due_date).all()
+    variety = db.query(models.RiceVariety).filter(models.RiceVariety.id == cultivation.variety_id).first() if cultivation else None
 
     if not cultivation or not forecast:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
     return {
+        "cultivation_id": cultivation.id,
+        "variety_name": variety.name if variety else "Bg 352",
+        "maturity_days": variety.maturity_days if variety else 105,
         "planting_date": cultivation.planting_date,
         "harvest_start": forecast.estimated_start_date,
         "harvest_end": forecast.estimated_end_date,
-        "expected_yield_mt": forecast.estimated_quantity
+        "expected_yield_mt": forecast.estimated_quantity,
+        "resource_plans": [
+            {
+                "id": p.id,
+                "task_type": p.task_type,
+                "recommended_input": p.recommended_input,
+                "due_date": p.due_date,
+                "quantity": p.quantity,
+                "unit": p.unit,
+                "status": p.status
+            }
+            for p in plans
+        ]
     }
 
 
-# --- 5. BUYER DEMAND ---
 class BuyerDemandSimpleCreate(BaseModel):
     season_id: int = 1
     buyer_id: int = 1
@@ -436,9 +413,6 @@ class BuyerDemandSimpleCreate(BaseModel):
 
 @app.post("/api/demand", tags=["Buyer"])
 def register_buyer_demand(demand: BuyerDemandSimpleCreate, db: Session = Depends(get_db)):
-    """Registers a buyer's requirement for rice in a specific region."""
-    sync_schema_and_seed(db)
-
     new_demand = models.BuyerDemand(
         season_id=demand.season_id,
         buyer_id=demand.buyer_id,
@@ -452,28 +426,170 @@ def register_buyer_demand(demand: BuyerDemandSimpleCreate, db: Session = Depends
     db.refresh(new_demand)
     return {"message": "Demand registered successfully", "id": new_demand.id}
 
+@app.get("/api/demand", tags=["Buyer"])
+def list_buyer_demands(db: Session = Depends(get_db)):
+    """Returns all registered buyer demands ordered by newest first."""
+    demands = db.query(models.BuyerDemand).order_by(models.BuyerDemand.id.desc()).all()
+    return [
+        {
+            "id": d.id,
+            "region": d.region,
+            "variety_class": d.variety_class,
+            "quantity": d.quantity,
+            "status": d.status
+        }
+        for d in demands
+    ]
 
-# --- 6. INTELLIGENCE & ANALYTICS OUTPUTS ---
-@app.get("/api/forecast/harvest", response_model=List[schemas.HarvestForecastResponse], tags=["Analytics"])
-def get_harvest_forecast(cultivation_id: int, db: Session = Depends(get_db)):
-    return db.query(models.HarvestForecast).filter(models.HarvestForecast.cultivation_id == cultivation_id).all()
+
+class ResourceStatusUpdate(BaseModel):
+    status: str
 
 
-@app.get("/api/resources/plans", response_model=List[schemas.ResourcePlanResponse], tags=["Analytics"])
-def get_resource_plans(cultivation_id: int, db: Session = Depends(get_db)):
-    return db.query(models.ResourcePlan).filter(models.ResourcePlan.cultivation_id == cultivation_id).order_by(models.ResourcePlan.due_date).all()
+@app.patch("/api/resources/plans/{plan_id}/status", tags=["Agrarian"])
+def update_resource_plan_status(plan_id: int, payload: ResourceStatusUpdate, db: Session = Depends(get_db)):
+    """Allows Agrarian Officers to mark fertilizer/resource plans as Dispatched or Completed."""
+    plan = db.query(models.ResourcePlan).filter(models.ResourcePlan.id == plan_id).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Resource plan not found")
+    plan.status = payload.status
+    db.commit()
+    db.refresh(plan)
+    return {"id": plan.id, "status": plan.status}
 
+
+@app.get("/api/agrarian/resource-plans", tags=["Agrarian"])
+def list_all_resource_plans(db: Session = Depends(get_db)):
+    """Lists individual fertilizer/input tasks across all fields for Agrarian Officers."""
+    rows = (
+        db.query(models.ResourcePlan, models.Cultivation, models.Field)
+        .join(models.Cultivation, models.ResourcePlan.cultivation_id == models.Cultivation.id)
+        .join(models.Field, models.Cultivation.field_id == models.Field.id)
+        .order_by(models.ResourcePlan.due_date.asc())
+        .all()
+    )
+    return [
+        {
+            "id": plan.id,
+            "field_name": field.name,
+            "task_type": plan.task_type,
+            "recommended_input": plan.recommended_input,
+            "quantity": plan.quantity,
+            "unit": plan.unit,
+            "due_date": plan.due_date,
+            "status": plan.status
+        }
+        for plan, cult, field in rows
+    ]
 
 @app.get("/api/analytics/supply-demand", tags=["Government"])
 def get_market_balance(db: Session = Depends(get_db)):
-    """Calculates the national/regional balance of rice supply vs demand."""
     total_supply = db.query(func.sum(models.HarvestForecast.estimated_quantity)).scalar() or 0.0
     total_demand = db.query(func.sum(models.BuyerDemand.quantity)).scalar() or 0.0
     balance = total_supply - total_demand
+
+    # Regional breakdown
+    demands = db.query(models.BuyerDemand).all()
+    forecasts = (
+        db.query(models.HarvestForecast, models.Field, models.Farm, models.RiceVariety, models.Cultivation)
+        .join(models.Cultivation, models.HarvestForecast.cultivation_id == models.Cultivation.id)
+        .join(models.Field, models.Cultivation.field_id == models.Field.id)
+        .join(models.Farm, models.Field.farm_id == models.Farm.id)
+        .join(models.RiceVariety, models.Cultivation.variety_id == models.RiceVariety.id)
+        .all()
+    )
+
+    regional_map = {}
+    for d in demands:
+        key = d.region
+        regional_map.setdefault(key, {"region": key, "supply_mt": 0.0, "demand_mt": 0.0})
+        regional_map[key]["demand_mt"] += float(d.quantity or 0.0)
+
+    for hf, field, farm, variety, cult in forecasts:
+        key = farm.region or "Anuradhapura"
+        regional_map.setdefault(key, {"region": key, "supply_mt": 0.0, "demand_mt": 0.0})
+        regional_map[key]["supply_mt"] += float(hf.estimated_quantity or 0.0)
+
+    regional_breakdown = []
+    for reg, vals in regional_map.items():
+        net = vals["supply_mt"] - vals["demand_mt"]
+        regional_breakdown.append({
+            "region": reg,
+            "supply_mt": round(vals["supply_mt"], 2),
+            "demand_mt": round(vals["demand_mt"], 2),
+            "balance_mt": round(net, 2),
+            "status": "Shortage" if net < 0 else "Surplus"
+        })
 
     return {
         "total_supply_mt": round(float(total_supply), 2),
         "total_demand_mt": round(float(total_demand), 2),
         "balance_mt": round(float(balance), 2),
-        "status": "Critical Shortage" if balance < 0 else "Healthy Surplus"
+        "status": "Critical Shortage" if balance < 0 else "Healthy Surplus",
+        "total_cultivations": db.query(models.Cultivation).count(),
+        "total_fields_acres": round(float(db.query(func.sum(models.Field.area)).scalar() or 0.0), 2),
+        "regional_breakdown": regional_breakdown
+    }
+
+
+@app.get("/api/agrarian/overview", tags=["Agrarian"])
+def get_agrarian_overview(db: Session = Depends(get_db)):
+    """Returns all registered fields, active cultivations, and fertilizer requirements for Agrarian Officers."""
+    rows = (
+        db.query(models.Cultivation, models.Field, models.RiceVariety, models.HarvestForecast)
+        .join(models.Field, models.Cultivation.field_id == models.Field.id)
+        .join(models.RiceVariety, models.Cultivation.variety_id == models.RiceVariety.id)
+        .outerjoin(models.HarvestForecast, models.HarvestForecast.cultivation_id == models.Cultivation.id)
+        .order_by(models.Cultivation.id.desc())
+        .all()
+    )
+
+    cultivation_list = []
+    for cult, field, variety, forecast in rows:
+        cultivation_list.append({
+            "cultivation_id": cult.id,
+            "field_name": field.name,
+            "area_acres": field.area,
+            "variety_name": variety.name,
+            "planting_date": cult.planting_date,
+            "expected_harvest": forecast.estimated_start_date if forecast else cult.expected_harvest_date,
+            "expected_yield_mt": forecast.estimated_quantity if forecast else 0.0,
+            "status": cult.status
+        })
+
+    fertilizer_totals = (
+        db.query(models.ResourcePlan.recommended_input, func.sum(models.ResourcePlan.quantity))
+        .group_by(models.ResourcePlan.recommended_input)
+        .all()
+    )
+
+    return {
+        "cultivations": cultivation_list,
+        "fertilizer_summary": [
+            {"input_name": name, "total_kg": round(float(qty or 0.0), 2)}
+            for name, qty in fertilizer_totals
+        ]
+    }
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+@app.post("/api/auth/login", tags=["Users & Auth"])
+def login(req: LoginRequest, db: Session = Depends(get_db)):
+    """Authenticates a user and returns their role-based access level."""
+    user = db.query(models.User).filter(models.User.username == req.username).first()
+    
+    # In a production environment, you would use bcrypt to verify hashes here.
+    # For this prototype, we match the seeded 'hashed_pw_123' or the raw password.
+    if not user or (user.password_hash != req.password and req.password != "hashed_pw_123"):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+        
+    role = db.query(models.Role).filter(models.Role.id == user.role_id).first()
+    
+    return {
+        "user_id": user.id,
+        "username": user.username,
+        "role": role.name,
+        "status": user.status
     }

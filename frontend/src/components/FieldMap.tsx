@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { MapContainer, TileLayer, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Polygon as LeafletPolygon, Tooltip, useMap } from 'react-leaflet';
 import axios from 'axios';
 import * as turf from '@turf/turf';
 import 'leaflet/dist/leaflet.css';
@@ -55,8 +55,35 @@ export default function FieldMap() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [scheduleData, setScheduleData] = useState<any>(null);
 
+  const [savedFields, setSavedFields] = useState<any[]>([]);
+  const [varieties, setVarieties] = useState<any[]>([]);
+
+  // Form State
   const [fieldName, setFieldName] = useState("My Paddy Plot");
   const [plantingDate, setPlantingDate] = useState("");
+  const [selectedVariety, setSelectedVariety] = useState<number>(1);
+  const [waterRegimeId, setWaterRegimeId] = useState<number>(1);
+  const [soilProfileId, setSoilProfileId] = useState<number>(1);
+
+  const loadInitialData = async () => {
+    try {
+      const [fieldsRes, varRes] = await Promise.all([
+        axios.get('http://127.0.0.1:8000/api/fields'),
+        axios.get('http://127.0.0.1:8000/api/catalog/varieties'),
+      ]);
+      setSavedFields(fieldsRes.data || []);
+      if (varRes.data && varRes.data.length > 0) {
+        setVarieties(varRes.data);
+        setSelectedVariety(varRes.data[0].id);
+      }
+    } catch (err) {
+      console.error("Failed to load initial map data:", err);
+    }
+  };
+
+  useEffect(() => {
+    loadInitialData();
+  }, []);
 
   const handlePolygonComplete = (coordinates: number[][]) => {
     const polygon = turf.polygon([coordinates]);
@@ -78,34 +105,32 @@ export default function FieldMap() {
 
     setIsSubmitting(true);
     try {
-      // 1. Save the Field Boundary (IDs must be integers matching WaterRegime & SoilProfile)
       const fieldPayload = {
         name: fieldName,
         area: calculatedArea.acres > 0 ? calculatedArea.acres : 0.1,
-        water_regime_id: 1,
-        soil_profile_id: 1,
+        water_regime_id: waterRegimeId,
+        soil_profile_id: soilProfileId,
         farm_id: 1,
         geometry_coordinates: fieldCoordinates
       };
       const fieldRes = await axios.post('http://127.0.0.1:8000/api/fields', fieldPayload);
 
-      // 2. Register the Cultivation
       const cultivationPayload = {
         field_id: fieldRes.data.id,
         season_id: 1,
-        variety_id: 1,
+        variety_id: selectedVariety,
         planting_date: plantingDate,
         status: "Planned"
       };
       const cultRes = await axios.post('http://127.0.0.1:8000/api/cultivations', cultivationPayload);
 
-      // 3. Fetch the generated Smart Schedule
       const scheduleRes = await axios.get(`http://127.0.0.1:8000/api/cultivations/${cultRes.data.id}/schedule`);
       setScheduleData(scheduleRes.data);
 
       alert("Success! Field mapped and cultivation scheduled.");
       setFieldCoordinates([]);
       setCalculatedArea({ acres: 0, perches: 0 });
+      loadInitialData();
     } catch (error: any) {
       const detail = error?.response?.data?.detail;
       console.error("Submission error:", detail || error);
@@ -125,6 +150,26 @@ export default function FieldMap() {
             maxZoom={20}
           />
           <GeomanControls onPolygonComplete={handlePolygonComplete} />
+
+          {/* Render existing saved fields on the map */}
+          {savedFields.map((f) => {
+            const coords = f.geometry?.coordinates?.[0];
+            if (!coords) return null;
+            const latLngs = coords.map((c: number[]) => [c[1], c[0]] as [number, number]);
+            return (
+              <LeafletPolygon
+                key={f.id}
+                positions={latLngs}
+                pathOptions={{ color: '#3b82f6', weight: 2, fillOpacity: 0.35 }}
+              >
+                <Tooltip sticky>
+                  <div className="text-xs font-semibold">
+                    {f.name} ({f.area} Acres)
+                  </div>
+                </Tooltip>
+              </LeafletPolygon>
+            );
+          })}
         </MapContainer>
       </div>
 
@@ -132,7 +177,7 @@ export default function FieldMap() {
         <div className="bg-gray-900 text-gray-100 p-6 rounded-lg shadow-md border border-gray-700">
           <h3 className="text-xl font-semibold mb-4 border-b border-gray-700 pb-2">Cultivation Details</h3>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <div>
               <label className="block text-sm text-gray-400 mb-1">Measured Area</label>
               <div className="text-lg font-mono text-green-400">
@@ -158,6 +203,46 @@ export default function FieldMap() {
                 onChange={(e) => setPlantingDate(e.target.value)}
                 className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-green-500"
               />
+            </div>
+
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Rice Variety</label>
+              <select
+                value={selectedVariety}
+                onChange={(e) => setSelectedVariety(Number(e.target.value))}
+                className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-green-500"
+              >
+                {varieties.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name} — {v.variety_class} ({v.maturity_days}d)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Water Regime</label>
+              <select
+                value={waterRegimeId}
+                onChange={(e) => setWaterRegimeId(Number(e.target.value))}
+                className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-green-500"
+              >
+                <option value={1}>Irrigated (Major/Minor Tank)</option>
+                <option value={2}>Rainfed</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Soil Profile</label>
+              <select
+                value={soilProfileId}
+                onChange={(e) => setSoilProfileId(Number(e.target.value))}
+                className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-green-500"
+              >
+                <option value={1}>Reddish Brown Earth</option>
+                <option value={2}>Low Humic Gley</option>
+                <option value={3}>Alluvial Soil</option>
+              </select>
             </div>
           </div>
 
