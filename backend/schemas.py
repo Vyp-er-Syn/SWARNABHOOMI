@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field as PydanticField
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, date
 
 # --- ROLE SCHEMAS ---
 class RoleBase(BaseModel):
@@ -21,7 +21,7 @@ class UserCreate(UserBase):
 
 class UserResponse(UserBase):
     id: int
-    last_login: Optional[datetime]
+    last_login: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
 # --- FARMER SCHEMAS ---
@@ -69,16 +69,12 @@ class FarmResponse(FarmBase):
 class FieldBase(BaseModel):
     name: str
     area: float
-    water_regime_id: str
-    soil_profile_id: str
+    water_regime_id: int  # Fixed: changed from str to int
+    soil_profile_id: int  # Fixed: changed from str to int
     
-class FieldCreate(BaseModel):
+class FieldCreate(FieldBase):
     farm_id: int
-    name: str
-    area: float
     geometry_coordinates: List[List[List[float]]]
-    water_regime_id: int  # Change this from str to int
-    soil_profile_id: int  # Change this from str to int
 
 class FieldResponse(FieldBase):
     id: int
@@ -87,7 +83,7 @@ class FieldResponse(FieldBase):
     geometry: Dict[str, Any] 
     model_config = ConfigDict(from_attributes=True)
 
-    # --- SEASON (KANNA) SCHEMAS ---
+# --- SEASON (KANNA) SCHEMAS ---
 class SeasonBase(BaseModel):
     name: str  # e.g., Maha / Yala
     year: int
@@ -125,7 +121,7 @@ class CultivationBase(BaseModel):
     field_id: int
     season_id: int
     variety_id: int
-    area: float
+   
     planting_date: datetime
     status: str = "Planned"
 
@@ -142,9 +138,9 @@ class BuyerDemandBase(BaseModel):
     season_id: int
     variety_class: str
     quantity: float
-    grade: str
-    harvest_start: datetime
-    harvest_end: datetime
+    grade: Optional[str] = None
+    harvest_start: Optional[datetime] = None
+    harvest_end: Optional[datetime] = None
     region: str
     status: str = "Published"
 
@@ -169,13 +165,13 @@ class ResourcePlanResponse(BaseModel):
 class HarvestForecastResponse(BaseModel):
     id: int
     cultivation_id: int
-    estimated_start_date: datetime
-    estimated_end_date: datetime
+    estimated_start_date: date
+    estimated_end_date: date
     estimated_quantity: Optional[float] = None
-    confidence: str
+    confidence_level: Optional[float] = None
     model_config = ConfigDict(from_attributes=True)   
 
-# Append to backend/schemas.py
+# --- ANALYTICS SCHEMAS ---
 class SupplyDemandBalanceResponse(BaseModel):
     region: str
     variety_class: str
